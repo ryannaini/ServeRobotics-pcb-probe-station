@@ -1,0 +1,62 @@
+<!--
+  This is the ONE real HTML file in the whole project. The browser loads
+  THIS file first when you visit localhost:5173 — everything else (React,
+  App.jsx, etc.) gets injected into it afterward by JavaScript.
+-->
+<!doctype html>
+<!-- <!doctype html> tells the browser "parse this as modern HTML5", not
+     some old/quirky version of HTML from the 90s. Always the first line. -->
+<html lang="en">
+  <!-- lang="en" tells the browser (and screen readers/translators) the
+       page's text is in English. Doesn't change how anything looks. -->
+  <head>
+    <!-- <head> holds metadata ABOUT the page — nothing in here is visible
+         on the page itself. Think of it as the page's settings/config,
+         as opposed to <body> which is the actual visible content. -->
+
+    <meta charset="UTF-8" />
+    <!-- <meta> tags are just key/value settings for the browser, they
+         render nothing. This one tells the browser which character
+         encoding to use so text (including emoji, special symbols, ↑ ↓
+         arrows used in the dashboard buttons) displays correctly instead
+         of showing garbled characters. -->
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- <link> connects this HTML file to an external resource/file.
+         rel="icon" specifically means "this is the tab/bookmark icon
+         (favicon)". type tells the browser what kind of file it is
+         (an SVG image here), and href is the file's location. You'll
+         also commonly see <link> used to load external CSS files. -->
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Another <meta> setting, this one aimed at mobile browsers:
+         "make the page's width match the actual device's screen width,
+         and don't zoom in/out by default." Without this, mobile browsers
+         often render pages zoomed out as if on a desktop screen. -->
+
+    <title>PCB Probe System</title>
+    <!-- <title> = the text shown on the browser tab. Currently just says
+         "frontend" because that's the project's folder/package name;
+         you could change this to something like "PCB Probe System". -->
+  </head>
+  <body>
+    <!-- <body> = everything the user actually SEES. Right now it's
+         almost empty on purpose — React fills it in with JavaScript. -->
+
+    <div id="root"></div>
+    <!-- This is the ONLY real content in the whole HTML file: one empty,
+         invisible box. `id="root"` is like className, but `id` is meant
+         to uniquely identify ONE specific element (vs className which
+         can be reused on many elements). main.jsx specifically looks
+         for an element with id="root" and injects the entire React app
+         (App -> LandingPage/Dashboard) inside this single <div>. -->
+
+    <script type="module" src="/src/main.jsx"></script>
+    <!-- <script> loads and runs JavaScript. type="module" means "treat
+         this file as an ES module" (so it's allowed to use import/export
+         statements like `import App from './App.jsx'`). src points at
+         main.jsx — this is the line that actually kicks everything off:
+         browser runs main.jsx -> main.jsx renders <App /> into #root
+         above -> you see the dashboard. -->
+  </body>
+</html>

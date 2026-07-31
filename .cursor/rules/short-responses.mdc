@@ -1,0 +1,12 @@
+---
+description: Keep AI responses short and easy to follow
+alwaysApply: true
+---
+
+# Short responses
+
+- Keep replies brief: about 3–5 sentences unless the user asks for more detail.
+- One step at a time. Do not dump full plans, tables, or long lists unless asked.
+- Explain the what and why in plain language; skip extra architecture unless requested.
+- When teaching, use one small example instead of covering everything at once.
+- After completing a task, stop. Do not suggest many follow-ups.
