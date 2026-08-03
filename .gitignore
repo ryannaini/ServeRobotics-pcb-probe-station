@@ -1,1 +1,17 @@
-.vs/ 
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+
+# Build outputs
+build/
+dist/
+*.o
+*.exe
