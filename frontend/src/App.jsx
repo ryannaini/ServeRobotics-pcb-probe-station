@@ -160,6 +160,7 @@ function Dashboard() {
   const [actuatorSpeed, setActuatorSpeed] = useState(1) // 1 = slow, 2 = fast
   const [actuatorError, setActuatorError] = useState('')
   const [flipError, setFlipError] = useState('')
+  const [flipBusy, setFlipBusy] = useState(false)
   const actuatorHoldRef = useRef(false)
   const flipHoldRef = useRef(false)
   // Visual-only Z bias for In/Out bar (−1 = Out, 0 = center, +1 = In)
@@ -227,45 +228,47 @@ function Dashboard() {
     actuatorHoldRef.current = false
   }
 
-  const flipHome = async () => {
-    setFlipError('')
+  const postFlip = async (url) => {
     try {
-      await fetch('http://localhost:8000/flip/home', { method: 'POST' })
+      const response = await fetch(url, { method: 'POST' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || data.status === 'error') {
+        setFlipError(data.message || 'Flip command failed')
+        return false
+      }
+      return true
     } catch {
       setFlipError('Could not reach flip board')
+      return false
     }
   }
 
+  const flipHome = async () => {
+    setFlipError('')
+    await postFlip('http://localhost:8000/flip/home')
+  }
+
+  // The board blocks until the 180 completes, so it ignores stop mid-flip
   const flip180 = async () => {
     setFlipError('')
-    try {
-      await fetch('http://localhost:8000/flip/180', { method: 'POST' })
-    } catch {
-      setFlipError('Could not reach flip board')
-    }
+    setFlipBusy(true)
+    await postFlip('http://localhost:8000/flip/180')
+    setFlipBusy(false)
   }
 
   const stopFlip = async () => {
     flipHoldRef.current = false
-    try {
-      await fetch('http://localhost:8000/flip/stop', { method: 'POST' })
-    } catch {
-      /* backend not wired yet */
-    }
+    await postFlip('http://localhost:8000/flip/stop')
   }
 
   const startFlipHold = async (dir) => {
     if (flipHoldRef.current) return
     flipHoldRef.current = true
     setFlipError('')
-    try {
-      const ccw = dir === 'ccw'
-      await fetch(`http://localhost:8000/flip/rotate?ccw=${ccw}`, { method: 'POST' })
-    } catch {
-      setFlipError('Could not reach flip board')
-      flipHoldRef.current = false
-    }
-  } 
+    const ccw = dir === 'ccw'
+    const ok = await postFlip(`http://localhost:8000/flip/rotate?ccw=${ccw}`)
+    if (!ok) flipHoldRef.current = false
+  }
 
   const flipHoldProps = (dir) => ({
     onMouseDown: (e) => {
@@ -864,8 +867,8 @@ function Dashboard() {
               </button>
             </div>
 
-            <button type="button" className="flip-180-btn" onClick={flip180}>
-              Flip 180°
+            <button type="button" className="flip-180-btn" onClick={flip180} disabled={flipBusy}>
+              {flipBusy ? 'Flipping…' : 'Flip 180°'}
             </button>
 
             {flipError && <p className="init-error flip-error">{flipError}</p>}

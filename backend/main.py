@@ -36,8 +36,12 @@ def initialize_arm():
     if actuator_status.get("status") == "ok":
         linear_actuators.start_serial_reader()
 
+    flip_status = flip_board.start_serial_program()
+    if flip_status.get("status") == "ok":
+        flip_board.start_serial_reader()
+
     arm_status = arm_bridge.initialize_robot()
-    return {**arm_status, "actuator": actuator_status}
+    return {**arm_status, "actuator": actuator_status, "flip": flip_status}
 
 ## ----------------------------------------------------------------
 ##          C A M E R A     L I V E    S T R E A M
@@ -68,7 +72,7 @@ def manualfocus(delta: int):
 ## ----------------------------------------------------------------
 ##          F L I P   B O A R D   C O M M A N D S
 
-@app.post("/flip")
+@app.post("/flip/180")
 def flip_180():
     return flip_board.flip_180()
 

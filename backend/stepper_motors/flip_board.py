@@ -1,14 +1,25 @@
-## Flip Board — own Arduino, own serial port
+"""
+Flip board controller — own Arduino, own serial port.
 
+flip_board.ino takes line commands (text + newline):
+  p   = flip 180 degrees (sets new home)
+  h   = return to home
+  cw  = jog clockwise    (runs until 's')
+  ccw = jog counterclockwise
+  s   = stop flip jog
+"""
+
+import threading
 import time
 
 import serial
 import serial.tools.list_ports
 
-# TODO: paste the flip board Arduino's serial number here
-FLIP_ARDUINO = ""
+FLIP_ARDUINO = "19794829515453484D202020FF0B2158"
 
 ser = None
+_lock = threading.Lock()
+_reader_stop = False
 
 
 def find_arduino_by_serial(target_serial):
@@ -40,6 +51,10 @@ def start_serial_program():
         ser = serial.Serial(port, 9600, timeout=1)
     except serial.SerialException as e:
         print(f"Could not open {port}: {e}")
+        print("Another program still has this port — check for:")
+        print("  - another flip_board.py terminal waiting at input")
+        print("  - python.exe in Task Manager")
+        print("  - Arduino Serial Monitor")
         return {"status": "error", "message": f"Could not open {port}: {e}"}
 
     # Opening the port resets the board — wait for setup() before sending
@@ -50,45 +65,78 @@ def start_serial_program():
 
 
 def stop_serial_program():
-    global ser
+    global ser, _reader_stop
+    _reader_stop = True
     if ser and ser.is_open:
         ser.close()
-        print("Serial closed")
+        print("Flip serial closed")
     ser = None
 
 
-def _flip_cmd(line: str):
-    if not ser or not ser.is_open:
-        return {"status": "error", "message": "Not connected to the Arduino"}
-    ser.write((line.strip() + "\n").encode("ascii"))
-    ser.flush()
-    return {"status": "ok", "message": line}
+def _connected():
+    return bool(ser and ser.is_open)
+
+
+def _read_loop():
+    """Print everything the Arduino sends — same as Serial Monitor."""
+    while not _reader_stop and _connected():
+        try:
+            raw = ser.readline()
+            if raw:
+                print(raw.decode("utf-8", errors="replace"), end="", flush=True)
+        except Exception:
+            break
+        time.sleep(0.01)
+
+
+def start_serial_reader():
+    global _reader_stop
+    if not _connected():
+        return
+    _reader_stop = False
+    threading.Thread(target=_read_loop, daemon=True).start()
+
+
+## ----------------------------------------------------------------
+##          W E B S I T E   A P I
+
+def _flip_cmd(line: str, message: str):
+    if not _connected():
+        return {"status": "error", "message": "Not connected to the Arduino, flip board"}
+    with _lock:
+        ser.write((line + "\n").encode("ascii"))
+        ser.flush()
+    return {"status": "ok", "message": message}
 
 
 def flip_180():
-    return _flip_cmd("p")
+    # The board blocks until the 180 finishes, so 's' cannot interrupt it
+    return _flip_cmd("p", "Flipping 180 degrees")
 
 
 def flip_home():
-    return _flip_cmd("h")
+    return _flip_cmd("h", "Returning to home")
 
 
 def flip_stop():
-    return _flip_cmd("s")
-
-
-def rotate_ccw():
-    return _flip_cmd("ccw")
+    return _flip_cmd("s", "Flip stopped")
 
 
 def rotate_cw():
-    return _flip_cmd("cw")
+    return _flip_cmd("cw", "Jogging clockwise")
+
+
+def rotate_ccw():
+    return _flip_cmd("ccw", "Jogging counterclockwise")
 
 
 def main():
     start_serial_program()
-    if not ser or not ser.is_open:
+    if not _connected():
+        print("Not connected")
         return
+
+    start_serial_reader()
 
     print("Flip Board Mechanism Control Module")
     print("  p   = flip 180 degrees (sets new home)")
