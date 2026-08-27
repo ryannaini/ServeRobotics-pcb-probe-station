@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 import asyncio
 import arm_bridge
 import camera
+from stepper_motors import flip_board, linear_actuators
 
 app = FastAPI()
 
@@ -31,7 +32,12 @@ def jog_arm(dx: float = 0, dy: float = 0):
 
 @app.post("/initialize")
 def initialize_arm():
-    return arm_bridge.initialize_robot()
+    actuator_status = linear_actuators.start_serial_program()
+    if actuator_status.get("status") == "ok":
+        linear_actuators.start_serial_reader()
+
+    arm_status = arm_bridge.initialize_robot()
+    return {**arm_status, "actuator": actuator_status}
 
 ## ----------------------------------------------------------------
 ##          C A M E R A     L I V E    S T R E A M
@@ -63,27 +69,46 @@ def manualfocus(delta: int):
 ##          F L I P   B O A R D   C O M M A N D S
 
 @app.post("/flip")
-def flip_180:
+def flip_180():
     return flip_board.flip_180()
 
 @app.post("/flip/home")
-def flip_home:
+def flip_home():
     return flip_board.flip_home()
 
 @app.post("/flip/stop")
-def flip_stop:
+def flip_stop():
     return flip_board.flip_stop()
 
 
 ## Flip/Rotate provides the boolean value of ccw to determine the direction of rotation
 ## Given though the main.jsx file /rotate?ccw=true or /rotate?ccw=false
 
-@app.post("flip/rotate")
+@app.post("/flip/rotate")
 def flip_rotate(ccw: bool):
     if ccw:
         return flip_board.rotate_ccw()
     else:
         return flip_board.rotate_cw()
+
+
+## ----------------------------------------------------------------
+##          L I N E A R   A C T U A T O R S
+##  Top/Bottom and Slow/Fast live in the UI; serial only fires on move.
+
+@app.post("/actuator/move")
+def actuator_move(actuator: int, dir: str, speed: int = 1):
+    return linear_actuators.start_move(actuator, speed, dir)
+
+
+@app.post("/actuator/stop")
+def actuator_stop():
+    return linear_actuators.stop_move()
+
+
+@app.post("/actuator/step")
+def actuator_step(actuator: int, dir: str = "forward", speed: int = 1):
+    return linear_actuators.step_once(actuator, speed, dir)
 
 @app.websocket("/ws/position")
 async def stream_position(websocket: WebSocket):

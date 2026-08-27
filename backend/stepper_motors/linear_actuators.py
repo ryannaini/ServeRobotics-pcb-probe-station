@@ -19,6 +19,11 @@ ser = None
 _lock = threading.Lock()
 _reader_stop = False
 
+# Mirrors the Arduino session so top/bottom and speed are only re-sent on change
+_current_actuator = None
+_current_speed = None
+_moving = False
+
 
 def find_arduino_by_serial(target_serial):
     for port in serial.tools.list_ports.comports():
@@ -64,11 +69,15 @@ def start_serial_program():
 
 
 def stop_serial_program():
-    global ser
+    global ser, _reader_stop, _current_actuator, _current_speed, _moving
+    _reader_stop = True
     if ser and ser.is_open:
         ser.close()
         print("Serial closed")
     ser = None
+    _current_actuator = None
+    _current_speed = None
+    _moving = False
 
 
 def _connected():
@@ -95,6 +104,121 @@ def _read_loop():
         except Exception:
             break
         time.sleep(0.01)
+
+
+def start_serial_reader():
+    """Echo Arduino output (ACTUATOR_READY, PROMPT_DIR, ...) to the console."""
+    global _reader_stop
+    if not _connected():
+        return
+    _reader_stop = False
+    threading.Thread(target=_read_loop, daemon=True).start()
+
+
+## ----------------------------------------------------------------
+##          W E B S I T E   A P I
+
+def _err(msg="Not connected to the Arduino, linear actuator"):
+    return {"status": "error", "message": msg}
+
+
+def _stop_unlocked():
+    global _moving
+    if _moving:
+        _send_char("s")
+        time.sleep(0.02)
+        _moving = False
+
+
+def _exit_unlocked():
+    global _current_actuator, _current_speed
+    _stop_unlocked()
+    if _current_actuator is not None and _connected():
+        _send_char("o")
+        time.sleep(0.05)
+    _current_actuator = None
+    _current_speed = None
+
+
+def _open_session(actuator: int, speed: int):
+    """Leave the Arduino sitting at PROMPT_DIR for this actuator and speed."""
+    global _current_actuator, _current_speed
+
+    if _current_actuator != actuator:
+        _exit_unlocked()
+        _send_char(str(actuator))
+        time.sleep(0.05)
+        _current_actuator = actuator
+        # Firmware asks for speed once, right after select
+        _send_char(str(speed))
+        time.sleep(0.02)
+        _current_speed = speed
+        return
+
+    _stop_unlocked()
+    if _current_speed != speed:
+        # 1/2 at PROMPT_DIR changes speed without leaving the session
+        _send_char(str(speed))
+        time.sleep(0.02)
+        _current_speed = speed
+
+
+def start_move(actuator: int, speed: int, direction: str):
+    """Hold-to-move START — the Arduino steps until stop_move() sends 's'."""
+    global _moving
+
+    if not _connected():
+        return _err()
+    if actuator not in (3, 4) or speed not in (1, 2):
+        return _err("actuator must be 3 or 4, speed must be 1 or 2")
+
+    d = direction.strip().lower()
+    if d in ("forward", "f"):
+        action = "f"
+    elif d in ("backward", "b"):
+        action = "b"
+    else:
+        return _err("direction must be forward or backward")
+
+    with _lock:
+        _open_session(actuator, speed)
+        _send_char(action)
+        _moving = True
+
+    return {
+        "status": "ok",
+        "message": "Moving forward" if action == "f" else "Moving backward",
+        "actuator": actuator,
+        "speed": speed,
+    }
+
+
+def stop_move():
+    """Hold-to-move STOP — 's' halts motion and releases the driver enable."""
+    with _lock:
+        _stop_unlocked()
+    return {"status": "ok", "message": "Actuator stopped"}
+
+
+def step_once(actuator: int, speed: int, direction: str = "forward"):
+    """Single step ('t'); the firmware only steps forward."""
+    if not _connected():
+        return _err()
+    if actuator not in (3, 4) or speed not in (1, 2):
+        return _err("actuator must be 3 or 4, speed must be 1 or 2")
+
+    with _lock:
+        _open_session(actuator, speed)
+        _send_char("t")
+
+    return {"status": "ok", "message": "Stepped once", "actuator": actuator, "speed": speed}
+
+
+def exit_actuator():
+    """Leave the actuator menu ('o') and forget the session."""
+    with _lock:
+        _exit_unlocked()
+    return {"status": "ok", "message": "Exited actuator"}
 
 
 def main():
