@@ -1,14 +1,67 @@
-## Flip Board — shares one serial port with linear actuators (motors_serial)
+## Flip Board — own Arduino, own serial port
 
-from stepper_motors import linear_actuators, motors_serial
+import time
+
+import serial
+import serial.tools.list_ports
+
+# TODO: paste the flip board Arduino's serial number here
+FLIP_ARDUINO = ""
+
+ser = None
+
+
+def find_arduino_by_serial(target_serial):
+    for port in serial.tools.list_ports.comports():
+        if port.serial_number == target_serial:
+            return port.device
+    return None
+
+
+def list_ports():
+    print("Available ports:")
+    for port in serial.tools.list_ports.comports():
+        print(f"  {port.device}  serial={port.serial_number}  {port.description}")
+
+
+def start_serial_program():
+    global ser
+    if ser and ser.is_open:
+        print(f"Already connected on {ser.port}")
+        return {"status": "ok", "message": f"Already connected on {ser.port}"}
+
+    port = find_arduino_by_serial(FLIP_ARDUINO)
+    if not port:
+        print(f"Arduino not found (serial {FLIP_ARDUINO})")
+        list_ports()
+        return {"status": "error", "message": f"Flip Arduino not found ({FLIP_ARDUINO})"}
+
+    try:
+        ser = serial.Serial(port, 9600, timeout=1)
+    except serial.SerialException as e:
+        print(f"Could not open {port}: {e}")
+        return {"status": "error", "message": f"Could not open {port}: {e}"}
+
+    # Opening the port resets the board — wait for setup() before sending
+    time.sleep(2.0)
+    ser.reset_input_buffer()
+    print(f"Connected on {port}")
+    return {"status": "ok", "message": f"Connected on {port}"}
+
+
+def stop_serial_program():
+    global ser
+    if ser and ser.is_open:
+        ser.close()
+        print("Serial closed")
+    ser = None
 
 
 def _flip_cmd(line: str):
-    """Exit actuator menu first, then send flip line command."""
-    if not motors_serial.ser or not motors_serial.ser.is_open:
+    if not ser or not ser.is_open:
         return {"status": "error", "message": "Not connected to the Arduino"}
-    linear_actuators.exit_actuator()
-    motors_serial.write_line(line)
+    ser.write((line.strip() + "\n").encode("ascii"))
+    ser.flush()
     return {"status": "ok", "message": line}
 
 
@@ -33,8 +86,8 @@ def rotate_cw():
 
 
 def main():
-    motors_serial.start_serial_program()
-    if not motors_serial.ser or not motors_serial.ser.is_open:
+    start_serial_program()
+    if not ser or not ser.is_open:
         return
 
     print("Flip Board Mechanism Control Module")
@@ -65,8 +118,7 @@ def main():
                 case _:
                     print("Invalid command")
     finally:
-        linear_actuators.exit_actuator()
-        motors_serial.stop_serial_program()
+        stop_serial_program()
 
 
 if __name__ == "__main__":
