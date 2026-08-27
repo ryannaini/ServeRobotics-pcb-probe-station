@@ -58,6 +58,33 @@ def manualfocus(delta: int):
     return result 
 
 
+
+## ----------------------------------------------------------------
+##          F L I P   B O A R D   C O M M A N D S
+
+@app.post("/flip")
+def flip_180:
+    return flip_board.flip_180()
+
+@app.post("/flip/home")
+def flip_home:
+    return flip_board.flip_home()
+
+@app.post("/flip/stop")
+def flip_stop:
+    return flip_board.flip_stop()
+
+
+## Flip/Rotate provides the boolean value of ccw to determine the direction of rotation
+## Given though the main.jsx file /rotate?ccw=true or /rotate?ccw=false
+
+@app.post("flip/rotate")
+def flip_rotate(ccw: bool):
+    if ccw:
+        return flip_board.rotate_ccw()
+    else:
+        return flip_board.rotate_cw()
+
 @app.websocket("/ws/position")
 async def stream_position(websocket: WebSocket):
     await websocket.accept()

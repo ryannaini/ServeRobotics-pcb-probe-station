@@ -1,41 +1,35 @@
-## Flip Board Mechanism Control Module
-import motors_serial
+## Flip Board — shares one serial port with linear actuators (motors_serial)
+
+from stepper_motors import linear_actuators, motors_serial
+
+
+def _flip_cmd(line: str):
+    """Exit actuator menu first, then send flip line command."""
+    if not motors_serial.ser or not motors_serial.ser.is_open:
+        return {"status": "error", "message": "Not connected to the Arduino"}
+    linear_actuators.exit_actuator()
+    motors_serial.write_line(line)
+    return {"status": "ok", "message": line}
 
 
 def flip_180():
-    if motors_serial.ser and motors_serial.ser.is_open:
-        motors_serial.ser.write(b"p\n")
-        return {"status": "ok", "message": "Flip 180 degrees"}
-    return {"status": "error", "message": "Not connected to the Arduino"}
-
+    return _flip_cmd("p")
 
 
 def flip_home():
-    if motors_serial.ser and motors_serial.ser.is_open:
-        motors_serial.ser.write(b"h\n")
-        return {"status": "ok", "message": "Flip home"}
-    return {"status": "error", "message": "Not connected to the Arduino"}
+    return _flip_cmd("h")
 
 
 def flip_stop():
-    if motors_serial.ser and motors_serial.ser.is_open:
-        motors_serial.ser.write(b"s\n")
-        return {"status": "ok", "message": "Flip stop"}
-    return {"status": "error", "message": "Not connected to the Arduino"}
+    return _flip_cmd("s")
 
 
 def rotate_ccw():
-    if motors_serial.ser and motors_serial.ser.is_open:
-        motors_serial.ser.write(b"ccw\n")
-        return {"status": "ok", "message": "Rotate counter-clockwise"}
-    return {"status": "error", "message": "Not connected to the Arduino"}
+    return _flip_cmd("ccw")
 
 
 def rotate_cw():
-    if motors_serial.ser and motors_serial.ser.is_open:
-        motors_serial.ser.write(b"cw\n")
-        return {"status": "ok", "message": "Rotate clockwise"}
-    return {"status": "error", "message": "Not connected to the Arduino"}
+    return _flip_cmd("cw")
 
 
 def main():
@@ -71,15 +65,9 @@ def main():
                 case _:
                     print("Invalid command")
     finally:
+        linear_actuators.exit_actuator()
         motors_serial.stop_serial_program()
 
 
 if __name__ == "__main__":
     main()
-    
-
-## Need to add a function to stop the program
-
-
-
-
