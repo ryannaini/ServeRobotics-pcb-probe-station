@@ -100,17 +100,69 @@ def start_serial_reader():
 ## ----------------------------------------------------------------
 ##          W E B S I T E   A P I
 
+# The sketch answers every command with one line: "OK <cmd>" or "ERR <reason>".
+# A p/h move reports "DONE <cmd> <pos>" later, when the motion actually ends.
+ACK_TIMEOUT_S = 1.5
+
+
+def _read_ack():
+    deadline = time.monotonic() + ACK_TIMEOUT_S
+    while time.monotonic() < deadline:
+        raw = ser.readline()
+        if not raw:
+            continue
+        line = raw.decode("utf-8", errors="replace").strip()
+        if line.startswith(("OK", "ERR")):
+            return line
+        # Anything else is menu text or a late DONE from a previous move
+        print(f"[flip] {line}")
+    return None
+
+
+# The sketch refuses a motion command while it is already moving. That is a
+# normal outcome (operator pressed twice), not a fault, so it gets its own
+# status the UI can show quietly.
+BUSY_REASONS = {
+    "flipping": "Still flipping — press Stop first",
+    "homing": "Returning to home — press Stop first",
+    "jogging cw": "Already jogging clockwise",
+    "jogging ccw": "Already jogging counterclockwise",
+}
+
+
+def _explain(ack: str, line: str):
+    if ack.startswith("ERR busy"):
+        reason = ack[len("ERR busy"):].strip()
+        return "busy", BUSY_REASONS.get(reason, f"Flip board is busy ({reason})")
+    if ack == "ERR overflow":
+        return "error", "Command arrived garbled at the flip board"
+    if ack == "ERR unknown":
+        return "error", f"Flip board did not recognise '{line}'"
+    return "error", f"Flip board rejected '{line}': {ack}"
+
+
 def _flip_cmd(line: str, message: str):
     if not _connected():
         return {"status": "error", "message": "Not connected to the Arduino, flip board"}
+
     with _lock:
+        # Drop anything left over from earlier commands so the ack we read
+        # belongs to this one.
+        ser.reset_input_buffer()
         ser.write((line + "\n").encode("ascii"))
-        ser.flush()
-    return {"status": "ok", "message": message}
+        ack = _read_ack()
+
+    if ack is None:
+        return {"status": "error", "message": f"No response from the flip board for '{line}'"}
+    if ack.startswith("ERR"):
+        status, explanation = _explain(ack, line)
+        return {"status": status, "message": explanation, "ack": ack}
+    return {"status": "ok", "message": message, "ack": ack}
 
 
 def flip_180():
-    # The board blocks until the 180 finishes, so 's' cannot interrupt it
+    # Returns as soon as the board accepts it; the move runs in the background
+    # and can be cancelled with flip_stop().
     return _flip_cmd("p", "Flipping 180 degrees")
 
 

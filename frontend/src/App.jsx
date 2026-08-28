@@ -110,8 +110,11 @@ function VoltageGraph({ samples, latestV, channel }) {
   )
 }
 
-function LandingPage({ onInitialize, status, error }) {
+const STEP_ICON = { pending: '○', running: '', done: '✓', failed: '✕' }
+
+function LandingPage({ onInitialize, status, error, steps = [] }) {
   const isInitializing = status === 'initializing'
+  const showSteps = isInitializing || steps.some((step) => step.state !== 'pending')
 
   return (
     <div className="landing">
@@ -136,13 +139,29 @@ function LandingPage({ onInitialize, status, error }) {
           {isInitializing ? 'Initializing...' : 'Initialize Robot'}
         </button>
 
+        {showSteps && (
+          <ul className="init-steps">
+            {steps.map((step) => (
+              <li key={step.id} className={`init-step init-step-${step.state}`}>
+                <span className="init-step-icon">
+                  {step.state === 'running' ? <span className="init-spinner" /> : STEP_ICON[step.state]}
+                </span>
+                <span className="init-step-label">{step.label}</span>
+                {step.note && <span className="init-step-note">{step.note}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+
         {error && <p className="init-error">{error}</p>}
       </div>
     </div>
   )
 }
 
-function Dashboard() {
+// boardStatus carries the /initialize result for each Arduino, so a board that
+// failed to connect shows up in its own panel instead of failing on first use.
+function Dashboard({ boardStatus = {} }) {
   const [position, setPosition] = useState({
     x: 0, y: 0, z: 0, thetaX: 0, thetaY: 0, thetaZ: 0,
   })
@@ -158,9 +177,13 @@ function Dashboard() {
   const [injectError, setInjectError] = useState('')
   const [actuatorId, setActuatorId] = useState(null) // 3 = top, 4 = bottom
   const [actuatorSpeed, setActuatorSpeed] = useState(1) // 1 = slow, 2 = fast
-  const [actuatorError, setActuatorError] = useState('')
-  const [flipError, setFlipError] = useState('')
-  const [flipBusy, setFlipBusy] = useState(false)
+  const [actuatorError, setActuatorError] = useState(
+    boardStatus.actuator?.status === 'error' ? boardStatus.actuator.message : '',
+  )
+  const [flipError, setFlipError] = useState(
+    boardStatus.flip?.status === 'error' ? boardStatus.flip.message : '',
+  )
+  const [flipNotice, setFlipNotice] = useState('')
   const actuatorHoldRef = useRef(false)
   const flipHoldRef = useRef(false)
   // Visual-only Z bias for In/Out bar (−1 = Out, 0 = center, +1 = In)
@@ -228,10 +251,19 @@ function Dashboard() {
     actuatorHoldRef.current = false
   }
 
+  // The board answers OK / ERR busy / ERR <fault>. "busy" just means the
+  // operator pressed something while it was already moving, so it reads as a
+  // notice rather than a failure.
   const postFlip = async (url) => {
+    setFlipNotice('')
     try {
       const response = await fetch(url, { method: 'POST' })
       const data = await response.json().catch(() => ({}))
+
+      if (data.status === 'busy') {
+        setFlipNotice(data.message)
+        return false
+      }
       if (!response.ok || data.status === 'error') {
         setFlipError(data.message || 'Flip command failed')
         return false
@@ -248,12 +280,9 @@ function Dashboard() {
     await postFlip('http://localhost:8000/flip/home')
   }
 
-  // The board blocks until the 180 completes, so it ignores stop mid-flip
   const flip180 = async () => {
     setFlipError('')
-    setFlipBusy(true)
     await postFlip('http://localhost:8000/flip/180')
-    setFlipBusy(false)
   }
 
   const stopFlip = async () => {
@@ -867,10 +896,11 @@ function Dashboard() {
               </button>
             </div>
 
-            <button type="button" className="flip-180-btn" onClick={flip180} disabled={flipBusy}>
-              {flipBusy ? 'Flipping…' : 'Flip 180°'}
+            <button type="button" className="flip-180-btn" onClick={flip180}>
+              Flip 180°
             </button>
 
+            {flipNotice && <p className="flip-notice">{flipNotice}</p>}
             {flipError && <p className="init-error flip-error">{flipError}</p>}
           </div>
           </div>
@@ -880,9 +910,16 @@ function Dashboard() {
   )
 }
 
+const INITIAL_STEPS = [
+  { id: 'arm', label: 'Robot arm — connect and move home', state: 'pending', note: '' },
+  { id: 'boards', label: 'Arduino boards — actuator and flip', state: 'pending', note: '' },
+]
+
 function App() {
   const [stage, setStage] = useState('landing')
   const [error, setError] = useState('')
+  const [boardStatus, setBoardStatus] = useState({})
+  const [steps, setSteps] = useState(INITIAL_STEPS)
 
   useEffect(() => {
     if (import.meta.env.DEV && window.location.search.includes('demo')) {
@@ -890,31 +927,61 @@ function App() {
     }
   }, [])
 
-  const initializeArm = async () => {
-    setStage('initializing')
-    setError('')
+  const markStep = (id, patch) =>
+    setSteps((prev) => prev.map((step) => (step.id === id ? { ...step, ...patch } : step)))
 
+  const runStep = async (id, url, timeoutMs) => {
+    markStep(id, { state: 'running', note: '' })
     try {
-      const response = await fetch('http://localhost:8000/initialize', { method: 'POST' })
-      const data = await response.json()
-
-      if (data.status === 'ok') {
-        setStage('ready')
-      } else {
-        setError(data.message || 'Initialization failed')
-        setStage('landing')
-      }
+      const response = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(timeoutMs) })
+      const data = await response.json().catch(() => ({}))
+      const ok = response.ok && data.status === 'ok'
+      // FastAPI's own errors (404, 422) carry only `detail`, so fall back to
+      // the HTTP status rather than printing "undefined".
+      const message = data.message || (response.ok ? '' : `HTTP ${response.status}`)
+      markStep(id, {
+        state: ok ? 'done' : 'failed',
+        note: ok ? message : [message, data.detail].filter(Boolean).join(' — ') || 'Failed',
+      })
+      return { ok, data }
     } catch (err) {
-      setError('Could not reach the backend. Is it running?')
-      setStage('landing')
+      markStep(id, {
+        state: 'failed',
+        note: err.name === 'TimeoutError' ? 'Timed out' : 'Could not reach the backend',
+      })
+      return { ok: false, data: {} }
     }
   }
 
-  if (stage === 'ready') {
-    return <Dashboard />
+  const initializeArm = async () => {
+    setStage('initializing')
+    setError('')
+    setSteps(INITIAL_STEPS)
+
+    // Homing takes ~15s and the backend gives up on the arm at 60s, so allow a
+    // little more than that before calling it a lost cause.
+    const arm = await runStep('arm', 'http://localhost:8000/initialize/arm', 90_000)
+    if (!arm.ok) {
+      setError('Robot did not reach READY — the dashboard needs the arm.')
+      setStage('landing')
+      return
+    }
+
+    // Each board opens its port with a 2s reset wait, so this step is short.
+    const boards = await runStep('boards', 'http://localhost:8000/initialize/boards', 30_000)
+    setBoardStatus({ actuator: boards.data.actuator, flip: boards.data.flip })
+
+    // A board that failed is reported in its own panel rather than blocking
+    // entry, but hold briefly so the ticks are readable before we switch.
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    setStage('ready')
   }
 
-  return <LandingPage onInitialize={initializeArm} status={stage} error={error} />
+  if (stage === 'ready') {
+    return <Dashboard boardStatus={boardStatus} />
+  }
+
+  return <LandingPage onInitialize={initializeArm} status={stage} error={error} steps={steps} />
 }
 
 export default App

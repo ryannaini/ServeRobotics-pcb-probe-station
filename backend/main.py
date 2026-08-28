@@ -30,18 +30,42 @@ def home_arm():
 def jog_arm(dx: float = 0, dy: float = 0):
     return arm_bridge.movecommands(dx, dy)
 
+## The UI runs these two as separate steps so it can tick off the arm before
+## the boards, instead of staring at one long request with no feedback.
+
+@app.post("/initialize/arm")
+def initialize_arm_only():
+    return arm_bridge.initialize_robot()
+
+
+@app.post("/initialize/boards")
+def initialize_boards():
+    # Close first: a previous session may still hold COM4/COM6, and re-opening
+    # a port we already own would just report "already connected".
+    linear_actuators.stop_serial_program()
+    flip_board.stop_serial_program()
+
+    actuator_status = linear_actuators.start_serial_program()
+    flip_status = flip_board.start_serial_program()
+
+    failed = [
+        name
+        for name, result in (("actuator", actuator_status), ("flip", flip_status))
+        if result.get("status") != "ok"
+    ]
+    return {
+        "status": "error" if failed else "ok",
+        "message": f"Could not connect: {', '.join(failed)}" if failed else "Both boards connected",
+        "actuator": actuator_status,
+        "flip": flip_status,
+    }
+
+
 @app.post("/initialize")
 def initialize_arm():
-    actuator_status = linear_actuators.start_serial_program()
-    if actuator_status.get("status") == "ok":
-        linear_actuators.start_serial_reader()
-
-    flip_status = flip_board.start_serial_program()
-    if flip_status.get("status") == "ok":
-        flip_board.start_serial_reader()
-
+    boards = initialize_boards()
     arm_status = arm_bridge.initialize_robot()
-    return {**arm_status, "actuator": actuator_status, "flip": flip_status}
+    return {**arm_status, "actuator": boards["actuator"], "flip": boards["flip"]}
 
 ## ----------------------------------------------------------------
 ##          C A M E R A     L I V E    S T R E A M

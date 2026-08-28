@@ -25,7 +25,37 @@
 import os
 import subprocess
 import threading
+from collections import deque
 from pathlib import Path
+
+# Last lines the C++ daemon wrote to stderr, kept for error messages.
+# A background thread has to keep this pipe drained: if it fills up, the
+# daemon blocks mid-write and never reaches its "READY" print, which hangs
+# /initialize forever.
+_stderr_tail = deque(maxlen=100)
+
+
+def _drain_stderr(pipe):
+    for line in iter(pipe.readline, ""):
+        _stderr_tail.append(line)
+    pipe.close()
+
+
+# Killing the backend does not kill the daemon it spawned, and that orphan keeps
+# the Kinova API session. A second daemon then blocks forever inside the DLL
+# without printing anything, so clear any leftover before starting a new one.
+def _terminate_orphan_daemons(exe_name):
+    subprocess.run(
+        ["taskkill", "/F", "/IM", exe_name],
+        capture_output=True,
+        text=True,
+    )
+
+
+# Upper bound on how long we wait for READY. The daemon normally takes ~15s
+# (homing included); anything past this is a hang, and /initialize must answer
+# so the UI can leave its "Initializing..." state.
+INIT_TIMEOUT_S = 60
 
 # -------------------------------------------------------------
 # GLOBAL PROCESS HANDLE
@@ -143,6 +173,8 @@ def initialize_robot():
     #   cwd=...
     #       → working directory for the child process (important for DLL loading)
     # ---------------------------------------------------------
+    _terminate_orphan_daemons(exe.name)
+
     _process = subprocess.Popen(
         [str(exe), "--daemon"],
         stdin=subprocess.PIPE,
@@ -151,6 +183,19 @@ def initialize_robot():
         text=True,
         cwd=str(dll_dir if dll_dir.exists() else exe.parent),
     )
+
+    _stderr_tail.clear()
+    threading.Thread(target=_drain_stderr, args=(_process.stderr,), daemon=True).start()
+
+    # Killing the daemon closes its stdout, which unblocks the readline below.
+    timed_out = threading.Event()
+
+    def _give_up(proc):
+        timed_out.set()
+        proc.kill()
+
+    watchdog = threading.Timer(INIT_TIMEOUT_S, _give_up, args=(_process,))
+    watchdog.start()
 
     # ---------------------------------------------------------
     # STEP 4: Wait for C++ to finish InitializeRobot().
@@ -162,21 +207,33 @@ def initialize_robot():
     # the two actual signal words the C++ daemon protocol defines.
     # ---------------------------------------------------------
     response = ""
-    while True:
-        line = _process.stdout.readline()
-        if not line:
-            # Empty string from readline() means the pipe closed, i.e. the
-            # C++ process exited/crashed before ever sending a real signal.
-            response = ""
-            break
-        response = line.strip()
-        if response in ("READY", "ERROR"):
-            break
-        # Otherwise it's just a diagnostic/debug line — ignore and keep reading.
+    try:
+        while True:
+            line = _process.stdout.readline()
+            if not line:
+                # Empty string from readline() means the pipe closed, i.e. the
+                # C++ process exited/crashed before ever sending a real signal.
+                response = ""
+                break
+            response = line.strip()
+            if response in ("READY", "ERROR"):
+                break
+            # Otherwise it's just a diagnostic/debug line — ignore and keep reading.
+    finally:
+        watchdog.cancel()
+
+    if timed_out.is_set():
+        _process = None
+        return {
+            "status": "error",
+            "message": f"Robot did not report READY within {INIT_TIMEOUT_S}s",
+            "detail": "".join(_stderr_tail),
+        }
 
     if response != "READY":
         # If we got here, init failed or printed something unexpected.
-        stderr = _process.stderr.read() if _process.stderr else ""
+        stderr = "".join(_stderr_tail)
+        _process = None
         return {
             "status": "error",
             "message": f"InitializeRobot failed ({response or 'no response'})",

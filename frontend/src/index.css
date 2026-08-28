@@ -5,12 +5,15 @@
   --text-h: #f2f5f8;
   --bg: #0c1118;
   --panel-bg: rgba(18, 26, 36, 0.82);
+  --card-bg: rgba(8, 14, 20, 0.55);
   --border: rgba(120, 150, 170, 0.28);
   --accent: #3d9b8f;
   --accent-hot: #5ec4b6;
+  --inject: #e0a85a;
   --danger: #e06c75;
   --mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
   --sans: 'Outfit', system-ui, sans-serif;
+  --radius: 6px;
 
   font: 17px/145% var(--sans);
   color: var(--text);
@@ -29,17 +32,21 @@
 body {
   margin: 0;
   min-height: 100svh;
+  height: 100svh;
+  overflow: hidden;
   background: var(--bg);
 }
 
 #root {
   width: 100%;
-  min-height: 100svh;
+  height: 100svh;
+  max-height: 100svh;
   margin: 0;
   text-align: left;
   border: none;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 h1, h2 {
@@ -223,12 +230,82 @@ code {
   font-size: 0.95rem;
 }
 
+/* ---------- Initialization progress ---------- */
+
+.init-steps {
+  list-style: none;
+  margin: 1.5rem auto 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  text-align: left;
+  max-width: 30rem;
+}
+
+.init-step {
+  display: grid;
+  grid-template-columns: 1.4rem 1fr;
+  gap: 0.1rem 0.6rem;
+  align-items: center;
+  font-size: 0.95rem;
+  color: var(--text-dim, #8fa3a0);
+  transition: color 0.2s ease;
+}
+
+.init-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  font-size: 0.9rem;
+}
+
+.init-step-note {
+  grid-column: 2;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.init-step-running {
+  color: var(--text);
+}
+
+.init-step-done {
+  color: var(--accent-hot);
+}
+
+.init-step-failed {
+  color: var(--danger);
+}
+
+.init-spinner {
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent-hot);
+  border-radius: 50%;
+  animation: init-spin 0.7s linear infinite;
+}
+
+@keyframes init-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ---------- Dashboard ---------- */
 
 .dashboard {
   flex: 1;
-  min-height: 100svh;
-  padding: 1.25rem 1.5rem 1.75rem;
+  height: 100%;
+  max-height: 100svh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0.65rem 1rem 0.75rem;
+  box-sizing: border-box;
   background:
     radial-gradient(ellipse 60% 40% at 0% 0%, rgba(40, 80, 90, 0.25), transparent 50%),
     var(--bg);
@@ -239,7 +316,8 @@ code {
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 0.6rem;
+  flex-shrink: 0;
 }
 
 .dash-brand {
@@ -257,14 +335,28 @@ code {
 }
 
 .dash-layout {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.75fr);
-  gap: 1.25rem;
-  align-items: start;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.95fr);
+  gap: 0.85rem;
+  align-items: stretch;
+}
+
+.dash-left {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 0.55rem;
+  min-height: 0;
+  overflow: hidden;
 }
 
 @media (max-width: 900px) {
   .dash-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-body {
     grid-template-columns: 1fr;
   }
 }
@@ -273,9 +365,606 @@ code {
   min-width: 0;
 }
 
+/* Bottom-left voltage telemetry */
+.voltage-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.75rem 0.85rem 0.85rem;
+  backdrop-filter: blur(12px);
+  min-width: 0;
+}
+
+.voltage-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.voltage-panel-head h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.voltage-panel-hint {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  opacity: 0.55;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.voltage-graph-wrap {
+  position: relative;
+  border: 1px solid rgba(120, 150, 170, 0.2);
+  border-radius: 4px;
+  background: rgba(6, 9, 14, 0.85);
+  overflow: hidden;
+}
+
+.voltage-graph-read {
+  border-color: rgba(94, 196, 182, 0.35);
+}
+
+.voltage-graph-inject {
+  border-color: rgba(224, 168, 90, 0.4);
+}
+
+.voltage-graph-read .voltage-trace,
+.voltage-graph-read .voltage-dot {
+  stroke: var(--accent-hot);
+  fill: var(--accent-hot);
+}
+
+.voltage-graph-inject .voltage-trace,
+.voltage-graph-inject .voltage-dot {
+  stroke: #e0a85a;
+  fill: #e0a85a;
+}
+
+.voltage-empty-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  fill: rgba(197, 205, 214, 0.35);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.camera-panel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.voltage-graph-svg {
+  display: block;
+  width: 100%;
+  height: 200px;
+}
+
+.voltage-grid-line {
+  stroke: rgba(120, 150, 170, 0.15);
+  stroke-width: 1;
+}
+
+.voltage-axis-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  fill: rgba(197, 205, 214, 0.55);
+}
+
+.voltage-trace {
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.voltage-graph-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.5rem;
+  border-top: 1px solid rgba(120, 150, 170, 0.12);
+  font-size: 0.75rem;
+}
+
+.voltage-graph-meta code {
+  font-size: 0.8rem;
+  color: var(--accent-hot);
+}
+
+.voltage-graph-mode {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  opacity: 0.65;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Shared panel chrome */
+.control-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  padding: 0.65rem 0.85rem;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+.panel-label {
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  color: var(--text);
+}
+
+.panel-badge {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.panel-badge-read {
+  color: var(--accent-hot);
+  border-color: rgba(94, 196, 182, 0.45);
+  background: rgba(61, 155, 143, 0.12);
+}
+
+.panel-badge-inject {
+  color: var(--inject);
+  border-color: rgba(224, 168, 90, 0.45);
+  background: rgba(224, 168, 90, 0.1);
+}
+
+/* Linear actuators (Arduino: 3=top, 4=bottom; speed 1=slow, 2=fast) */
+.actuator-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0;
+}
+
+.actuator-step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.actuator-step-label {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.actuator-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
+
+.actuator-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.4rem;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(40, 55, 70, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.actuator-btn:hover {
+  border-color: rgba(94, 196, 182, 0.45);
+  background: rgba(55, 75, 95, 0.9);
+}
+
+.actuator-btn-active {
+  color: var(--text-h);
+  background: rgba(61, 155, 143, 0.22);
+  border-color: rgba(94, 196, 182, 0.55);
+}
+
+.actuator-num {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  opacity: 0.75;
+}
+
+.actuator-speed {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+.actuator-speed-btn {
+  padding: 0.4rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(40, 55, 70, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.actuator-speed-btn-active {
+  color: var(--text-h);
+  background: rgba(61, 155, 143, 0.25);
+  border-color: rgba(94, 196, 182, 0.5);
+}
+
+.actuator-move-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.actuator-move-btn {
+  padding: 0.55rem 0.35rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-h);
+  background: rgba(40, 55, 70, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.actuator-move-btn:hover:not(:disabled) {
+  border-color: rgba(94, 196, 182, 0.45);
+}
+
+.actuator-move-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.actuator-stop-btn {
+  padding: 0.55rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-h);
+  background: rgba(224, 108, 117, 0.2);
+  border: 1px solid rgba(224, 108, 117, 0.45);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.actuator-stop-btn:hover {
+  background: rgba(224, 108, 117, 0.32);
+}
+
+.actuator-step-once-btn {
+  margin-top: 0.15rem;
+  padding: 0.35rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--text);
+  background: transparent;
+  border: 1px dashed rgba(120, 150, 170, 0.35);
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.actuator-step-once-btn:hover {
+  border-color: rgba(94, 196, 182, 0.45);
+  opacity: 1;
+}
+
+.actuator-error {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+/* Channel switch — under voltage graph (left column) */
+.channel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  flex-shrink: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.channel-body {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.42fr) minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: stretch;
+}
+
+.channel-segment {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.channel-seg-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  flex: 1;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.35rem;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(40, 55, 70, 0.85);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.channel-seg-btn:hover {
+  border-color: rgba(94, 196, 182, 0.45);
+  background: rgba(55, 75, 95, 0.9);
+}
+
+.channel-seg-btn-active {
+  color: var(--text-h);
+  background: rgba(61, 155, 143, 0.28);
+  border-color: rgba(94, 196, 182, 0.65);
+  box-shadow: 0 0 0 1px rgba(94, 196, 182, 0.2);
+}
+
+.channel-detail {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 5.5rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.channel-detail-read {
+  background: rgba(61, 155, 143, 0.06);
+  border-color: rgba(94, 196, 182, 0.25);
+}
+
+.channel-detail-inject {
+  background: rgba(224, 168, 90, 0.06);
+  border-color: rgba(224, 168, 90, 0.35);
+}
+
+.channel-detail-title {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-hot);
+}
+
+.channel-detail-desc {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  opacity: 0.75;
+}
+
+.channel-num {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  opacity: 0.75;
+  letter-spacing: 0.06em;
+}
+
+.inject-label {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  color: var(--text);
+}
+
+.inject-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.inject-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--text-h);
+  background: rgba(8, 14, 20, 0.75);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: none;
+}
+
+.inject-input:focus {
+  border-color: rgba(224, 168, 90, 0.55);
+  box-shadow: 0 0 0 1px rgba(224, 168, 90, 0.2);
+}
+
+.inject-input::placeholder {
+  color: rgba(197, 205, 214, 0.35);
+}
+
+.inject-apply-btn {
+  padding: 0.45rem 0.75rem;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #1a1208;
+  background: #e0a85a;
+  border: 1px solid rgba(224, 168, 90, 0.65);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.inject-apply-btn:hover {
+  filter: brightness(1.06);
+}
+
+.inject-applied {
+  margin: 0;
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  opacity: 0.75;
+}
+
+.inject-applied code {
+  color: #e0a85a;
+}
+
+.inject-error {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+/* Flip motorboard */
+.flip-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.flip-home-btn {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-h);
+  background: rgba(40, 55, 70, 0.95);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.flip-home-btn:hover {
+  border-color: rgba(94, 196, 182, 0.45);
+}
+
+.flip-move-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.flip-move-btn {
+  padding: 0.55rem 0.35rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-h);
+  background: rgba(40, 55, 70, 0.95);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.flip-move-btn:hover {
+  border-color: rgba(94, 196, 182, 0.45);
+}
+
+.flip-stop-btn {
+  padding: 0.55rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-h);
+  background: rgba(224, 108, 117, 0.2);
+  border: 1px solid rgba(224, 108, 117, 0.45);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.flip-stop-btn:hover {
+  background: rgba(224, 108, 117, 0.32);
+}
+
+.flip-180-btn {
+  width: 100%;
+  padding: 0.65rem 1rem;
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-h);
+  background: rgba(61, 155, 143, 0.22);
+  border: 1px solid rgba(94, 196, 182, 0.55);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.flip-180-btn:hover {
+  background: rgba(61, 155, 143, 0.35);
+  border-color: rgba(94, 196, 182, 0.7);
+}
+
+.flip-error {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+/* Board said "busy" — expected, not a fault, so it reads softer than an error */
+.flip-notice {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--accent-hot);
+  opacity: 0.9;
+}
+
 .camera-frame {
-  aspect-ratio: 16 / 10;
-  width: 99%;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  aspect-ratio: unset;
   border: 4.16px solid rgba(94, 196, 182, 0.45);
   border-radius: 4px;
   overflow: hidden;
@@ -293,7 +982,7 @@ code {
 .camera-placeholder {
   width: 100%;
   height: 100%;
-  min-height: 220px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -320,26 +1009,51 @@ code {
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 1.25rem;
+  padding: 1rem 1.15rem;
   backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.controls-stack {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.65rem;
+  min-height: 0;
+}
+
+.controls-jog {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
 }
 
 .controls-panel h2 {
-  font-size: 0.85rem;
+  font-size: 0.95rem;
+  flex-shrink: 0;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   opacity: 0.8;
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.45rem;
 }
 
 .telemetry {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.3rem 0.75rem;
-  margin-bottom: 1.25rem;
-  padding-bottom: 0.75rem;
+  gap: 0.35rem 0.85rem;
+  margin-bottom: 0;
+  padding-bottom: 0.65rem;
   border-bottom: 1px solid rgba(120, 150, 170, 0.15);
+  flex-shrink: 0;
 }
 
 .telemetry-row {
@@ -347,7 +1061,7 @@ code {
   justify-content: space-between;
   align-items: baseline;
   gap: 0.5rem;
-  font-size: 0.8rem;
+  font-size: 0.88rem;
 }
 
 .telemetry-row span {
@@ -465,9 +1179,9 @@ code {
 }
 
 .dpad-btn {
-  width: 56px;
-  height: 56px;
-  font-size: 1.1rem;
+  width: 62px;
+  height: 62px;
+  font-size: 1.15rem;
   font-family: var(--sans);
   color: var(--text-h);
   background: rgba(40, 55, 70, 0.9);
@@ -483,8 +1197,8 @@ code {
 }
 
 .dpad-home {
-  width: 72px;
-  font-size: 0.8rem;
+  width: 78px;
+  font-size: 0.82rem;
   font-weight: 600;
   background: rgba(61, 155, 143, 0.25);
   border-color: rgba(94, 196, 182, 0.55);
@@ -495,20 +1209,16 @@ code {
 }
 
 .wasd-legend {
-  margin-top: 1rem;
+  margin-top: 0.55rem;
   text-align: center;
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   opacity: 0.7;
 }
 
 /* Camera optics strip (under jog) */
 .optics-bar {
-  margin-top: 1.25rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(8, 14, 20, 0.55);
+  margin-top: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
