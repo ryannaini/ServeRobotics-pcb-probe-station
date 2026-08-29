@@ -16,7 +16,9 @@ import serial.tools.list_ports
 ACTUATOR_ARDUINO = "16C153BB515453484D202020FF0B2515"
 
 ser = None
-_lock = threading.Lock()
+# Reentrant: the command helpers below take this lock and then call
+# _send_char, which takes it again. A plain Lock deadlocks there.
+_lock = threading.RLock()
 _reader_stop = False
 
 # Mirrors the Arduino session so top/bottom and speed are only re-sent on change
@@ -39,7 +41,7 @@ def list_ports():
 
 
 def start_serial_program():
-    global ser
+    global ser, _current_actuator, _current_speed, _moving
     if ser and ser.is_open:
         print(f"Already connected on {ser.port}")
         return {"status": "ok", "message": f"Already connected on {ser.port}"}
@@ -64,6 +66,12 @@ def start_serial_program():
     # Opening the port resets the board — wait for setup() before sending
     time.sleep(2.0)
     ser.reset_input_buffer()
+
+    # The reset also dropped whatever session we thought we had
+    _current_actuator = None
+    _current_speed = None
+    _moving = False
+
     print(f"Connected on {port}")
     return {"status": "ok", "message": f"Connected on {port}"}
 
@@ -122,45 +130,92 @@ def _err(msg="Not connected to the Arduino, linear actuator"):
     return {"status": "error", "message": msg}
 
 
+# The sketch's top-level loop() answers only to '3' and '4' — every other byte
+# is discarded in silence. So if the board resets (opening the port does that)
+# while Python still thinks a session is open, f/b/s/t vanish and the actuator
+# looks dead. Confirming each step against the markers the sketch prints lets
+# us notice that and rebuild the session.
+ACK_TIMEOUT_S = 2.0
+
+
+def _read_until(markers, timeout=ACK_TIMEOUT_S):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        raw = ser.readline()
+        if not raw:
+            continue
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        if line.startswith(tuple(markers)):
+            return line
+        print(f"[actuator] {line}")
+    return None
+
+
 def _stop_unlocked():
     global _moving
     if _moving:
         _send_char("s")
-        time.sleep(0.02)
+        _read_until(("ACTUATOR_STOPPED",), 1.0)
         _moving = False
 
 
-def _exit_unlocked():
+def _open_session(actuator: int, speed: int):
+    """Drive the board to PROMPT_DIR for this actuator and speed, from any state."""
     global _current_actuator, _current_speed
-    _stop_unlocked()
-    if _current_actuator is not None and _connected():
-        _send_char("o")
-        time.sleep(0.05)
+
     _current_actuator = None
     _current_speed = None
+    _stop_unlocked()
+
+    # 'o' leaves an open session; at the top level it is simply ignored.
+    _send_char("o")
+    _read_until(("ACTUATOR_EXIT",), 0.3)
+    ser.reset_input_buffer()
+
+    _send_char(str(actuator))
+    if not _read_until(("ACTUATOR_READY",)):
+        return False
+    if not _read_until(("PROMPT_SCALE",)):
+        return False
+
+    _send_char(str(speed))
+    if not _read_until(("PROMPT_DIR",)):
+        return False
+
+    _current_actuator = actuator
+    _current_speed = speed
+    return True
 
 
-def _open_session(actuator: int, speed: int):
-    """Leave the Arduino sitting at PROMPT_DIR for this actuator and speed."""
-    global _current_actuator, _current_speed
+def _ensure_session(actuator: int, speed: int):
+    global _current_speed
 
     if _current_actuator != actuator:
-        _exit_unlocked()
-        _send_char(str(actuator))
-        time.sleep(0.05)
-        _current_actuator = actuator
-        # Firmware asks for speed once, right after select
-        _send_char(str(speed))
-        time.sleep(0.02)
-        _current_speed = speed
-        return
+        return _open_session(actuator, speed)
 
-    _stop_unlocked()
     if _current_speed != speed:
         # 1/2 at PROMPT_DIR changes speed without leaving the session
         _send_char(str(speed))
-        time.sleep(0.02)
+        if not _read_until(("SCALE_SET",)):
+            return _open_session(actuator, speed)
         _current_speed = speed
+
+    return True
+
+
+def _command(ch: str, markers, actuator: int, speed: int):
+    """Send one char at PROMPT_DIR; rebuild the session and retry if ignored."""
+    _send_char(ch)
+    ack = _read_until(markers)
+    if ack:
+        return ack
+
+    if not _open_session(actuator, speed):
+        return None
+    _send_char(ch)
+    return _read_until(markers)
 
 
 def start_move(actuator: int, speed: int, direction: str):
@@ -181,8 +236,12 @@ def start_move(actuator: int, speed: int, direction: str):
         return _err("direction must be forward or backward")
 
     with _lock:
-        _open_session(actuator, speed)
-        _send_char(action)
+        if not _ensure_session(actuator, speed):
+            return _err(f"Actuator {actuator} did not respond — is the board powered?")
+
+        ack = _command(action, ("MOVING_FWD", "MOVING_BWD"), actuator, speed)
+        if not ack:
+            return _err(f"Actuator {actuator} ignored '{action}'")
         _moving = True
 
     return {
@@ -208,16 +267,24 @@ def step_once(actuator: int, speed: int, direction: str = "forward"):
         return _err("actuator must be 3 or 4, speed must be 1 or 2")
 
     with _lock:
-        _open_session(actuator, speed)
-        _send_char("t")
+        if not _ensure_session(actuator, speed):
+            return _err(f"Actuator {actuator} did not respond — is the board powered?")
+        if not _command("t", ("STEP_ONCE",), actuator, speed):
+            return _err(f"Actuator {actuator} ignored the step")
 
     return {"status": "ok", "message": "Stepped once", "actuator": actuator, "speed": speed}
 
 
 def exit_actuator():
     """Leave the actuator menu ('o') and forget the session."""
+    global _current_actuator, _current_speed
     with _lock:
-        _exit_unlocked()
+        _stop_unlocked()
+        if _current_actuator is not None:
+            _send_char("o")
+            _read_until(("ACTUATOR_EXIT",), 0.5)
+        _current_actuator = None
+        _current_speed = None
     return {"status": "ok", "message": "Exited actuator"}
 
 

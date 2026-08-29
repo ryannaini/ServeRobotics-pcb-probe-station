@@ -23,8 +23,10 @@
 # =============================================================
 
 import os
+import queue
 import subprocess
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -36,20 +38,46 @@ _stderr_tail = deque(maxlen=100)
 
 
 def _drain_stderr(pipe):
-    for line in iter(pipe.readline, ""):
-        _stderr_tail.append(line)
+    for raw in iter(pipe.readline, b""):
+        _stderr_tail.append(raw.decode("utf-8", errors="replace"))
     pipe.close()
+
+
+def _decode_line(raw):
+    if not raw:
+        return ""
+    return raw.decode("utf-8", errors="replace").strip()
+
+
+def _daemon_running(exe_name):
+    listing = subprocess.run(
+        ["tasklist", "/FI", f"IMAGENAME eq {exe_name}"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    return exe_name.lower() in listing.lower()
 
 
 # Killing the backend does not kill the daemon it spawned, and that orphan keeps
 # the Kinova API session. A second daemon then blocks forever inside the DLL
 # without printing anything, so clear any leftover before starting a new one.
 def _terminate_orphan_daemons(exe_name):
-    subprocess.run(
+    killed = subprocess.run(
         ["taskkill", "/F", "/IM", exe_name],
         capture_output=True,
         text=True,
     )
+    if "SUCCESS" not in killed.stdout.upper():
+        return  # nothing was running
+
+    # taskkill returns before the process is gone, and the arm holds its
+    # Ethernet session a moment longer still. Starting into that window is
+    # what makes initialization hang some of the time.
+    for _ in range(20):
+        if not _daemon_running(exe_name):
+            break
+        time.sleep(0.25)
+    time.sleep(1.5)
 
 
 # Upper bound on how long we wait for READY. The daemon normally takes ~15s
@@ -78,6 +106,42 @@ _process = None
 # on the same pipe and steal each other's "done" lines → hung requests
 # and a frontend that looks like it "lost connection".
 _pipe_lock = threading.Lock()
+
+# stdout is read on a background thread so a stuck C++ reply cannot freeze
+# FastAPI. Callers wait on this queue with a timeout instead of readline().
+_stdout_q = queue.Queue()
+
+
+def _stdout_reader():
+    while _process is not None and _process.poll() is None:
+        raw = _process.stdout.readline()
+        if not raw:
+            break
+        _stdout_q.put(_decode_line(raw))
+
+
+def _drain_stdout_q():
+    while True:
+        try:
+            _stdout_q.get_nowait()
+        except queue.Empty:
+            return
+
+
+def _wait_for_signal(timeout_s, signals=("done", "error")):
+    """Return (signal, last_other_line). last_other is for coordinates."""
+    deadline = time.monotonic() + timeout_s
+    last_other = ""
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        try:
+            text = _stdout_q.get(timeout=min(0.2, remaining))
+        except queue.Empty:
+            continue
+        if text in signals:
+            return text, last_other
+        last_other = text
+    return None, last_other
 
 
 # -------------------------------------------------------------
@@ -175,12 +239,14 @@ def initialize_robot():
     # ---------------------------------------------------------
     _terminate_orphan_daemons(exe.name)
 
+        # Binary pipes on purpose. text=True on Windows translates "\n" → "\r\n",
+    # so getline() in the daemon sees "in\r" and never matches "in".
     _process = subprocess.Popen(
         [str(exe), "--daemon"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        bufsize=0,
         cwd=str(dll_dir if dll_dir.exists() else exe.parent),
     )
 
@@ -209,13 +275,13 @@ def initialize_robot():
     response = ""
     try:
         while True:
-            line = _process.stdout.readline()
-            if not line:
+            raw = _process.stdout.readline()
+            if not raw:
                 # Empty string from readline() means the pipe closed, i.e. the
                 # C++ process exited/crashed before ever sending a real signal.
                 response = ""
                 break
-            response = line.strip()
+            response = _decode_line(raw)
             if response in ("READY", "ERROR"):
                 break
             # Otherwise it's just a diagnostic/debug line — ignore and keep reading.
@@ -273,57 +339,16 @@ def initialize_robot():
     #         "detail": stderr,
     #     }
 
+    # From here on, stdout is owned by the reader thread — do not readline()
+    # on _process.stdout from request handlers.
+    _drain_stdout_q()
+    threading.Thread(target=_stdout_reader, daemon=True).start()
+
     return {"status": "ok", "message": "Robot initialized and homed"}
 
 
-def cartesian_coordinates():
-    if _process is None or _process.poll() is not None:
-        return {
-            "status": "error",
-            "message": "_process not intialized properly",
-            "detail": None,
-        }
-
-    with _pipe_lock:
-        _process.stdin.write("coordinates\n")
-        _process.stdin.flush()
-
-        response = ""
-        while True:
-            line = _process.stdout.readline()
-            if not line:
-                response = ""
-                break
-            complete = line.strip()
-            if complete == "done":
-                break
-            response = complete.split()
-
-        if len(response) == 6:
-            return {
-                "status": "ok",
-                "message": {
-                    "x": float(response[0]),
-                    "y": float(response[1]),
-                    "z": float(response[2]),
-                    "thetaX": float(response[3]),
-                    "thetaY": float(response[4]),
-                    "thetaZ": float(response[5]),
-                },
-            }
-
-        return {
-            "status": "error",
-            "message": "output not reading all values correctly",
-            "detail": None,
-        }
-
-
-def movecommands(dx, dy):
-    """
-    Map a D-pad delta (dx, dy) to a C++ daemon command and wait for "done".
-    Frontend typically sends: right (1,0), left (-1,0), up (0,1), down (0,-1).
-    """
+def _roundtrip(command, timeout_s=5.0):
+    """Send one daemon line and wait for done/error. Never blocks forever."""
     if _process is None or _process.poll() is not None:
         return {
             "status": "error",
@@ -331,6 +356,77 @@ def movecommands(dx, dy):
             "detail": None,
         }
 
+    if not _pipe_lock.acquire(timeout=timeout_s):
+        return {"status": "error", "message": f"daemon busy — '{command}' not sent"}
+
+    try:
+        _drain_stdout_q()
+        _process.stdin.write((command + "\n").encode("ascii"))
+        _process.stdin.flush()
+        print(f"SENDING: {command}")
+
+        signal, extra = _wait_for_signal(timeout_s)
+        print(f"GOT: {signal or '(timeout)'} extra={extra!r}")
+
+        if signal == "done":
+            return {"status": "ok", "message": f"{command} complete", "detail": extra}
+        if signal == "error":
+            return {"status": "error", "message": f"daemon rejected command '{command}'"}
+        return {
+            "status": "error",
+            "message": f"no reply from daemon for '{command}' within {timeout_s}s",
+        }
+    finally:
+        _pipe_lock.release()
+
+
+def cartesian_coordinates():
+    # Position stream must not steal the pipe from a jog — skip this tick.
+    if not _pipe_lock.acquire(timeout=0.05):
+        return {"status": "error", "message": "daemon busy"}
+
+    try:
+        if _process is None or _process.poll() is not None:
+            return {
+                "status": "error",
+                "message": "_process not intialized properly",
+                "detail": None,
+            }
+
+        _drain_stdout_q()
+        _process.stdin.write(b"coordinates\n")
+        _process.stdin.flush()
+
+        signal, extra = _wait_for_signal(2.0)
+        parts = extra.split() if extra else []
+
+        if signal == "done" and len(parts) == 6:
+            return {
+                "status": "ok",
+                "message": {
+                    "x": float(parts[0]),
+                    "y": float(parts[1]),
+                    "z": float(parts[2]),
+                    "thetaX": float(parts[3]),
+                    "thetaY": float(parts[4]),
+                    "thetaZ": float(parts[5]),
+                },
+            }
+
+        return {
+            "status": "error",
+            "message": "output not reading all values correctly",
+            "detail": extra or signal,
+        }
+    finally:
+        _pipe_lock.release()
+
+
+def movecommands(dx, dy):
+    """
+    Map a D-pad delta (dx, dy) to a C++ daemon command and wait for "done".
+    Frontend typically sends: right (1,0), left (-1,0), up (0,1), down (0,-1).
+    """
     if dx == 1 and dy == 0:
         command = "right"
     elif dx == -1 and dy == 0:
@@ -345,53 +441,28 @@ def movecommands(dx, dy):
             "message": f"unsupported jog delta dx={dx}, dy={dy}",
         }
 
-    with _pipe_lock:
-        _process.stdin.write(command + "\n")
-        _process.stdin.flush()
-        print(f"SENDING: {command}")
+    return _roundtrip(command)
 
-        while True:
-            line = _process.stdout.readline()
-            if not line:
-                print("GOT: (process closed stdout)")
-                return {"status": "error", "message": "process died unexpectedly"}
 
-            line = line.strip()
-            print(f"GOT: {line}")
+def move_in_out(direction):
+    """
+    In/Out along the probe axis. Like the D-pad jogs, the C++ sends one short
+    CARTESIAN_VELOCITY pulse per call, so the frontend repeats this while the
+    control is held rather than expecting one long move.
+    """
+    command = str(direction).strip().lower()
+    if command not in ("in", "out"):
+        return {"status": "error", "message": f"direction must be in or out, got '{direction}'"}
 
-            if line == "done":
-                return {"status": "ok", "message": "moved"}
-            if line == "error":
-                return {"status": "error", "message": f"daemon rejected command '{command}'"}
+    return _roundtrip(command)
+
+
+def retract():
+    """Send the arm to the rest pose (Shervins_Rest in the daemon)."""
+    return _roundtrip("retract", timeout_s=15.0)
 
 
 def movinghome():
-    if _process is None or _process.poll() is not None:
-        return {
-            "status": "error",
-            "message": "_process not initialized properly",
-            "detail": None,
-        }
-
-    print("movinghome: waiting for pipe lock...")
-    with _pipe_lock:
-        print("movinghome: got lock, sending home")
-        _process.stdin.write("home\n")
-        _process.stdin.flush()
-        print("SENDING: home")
-
-        while True:
-            line = _process.stdout.readline()
-            if not line:
-                print("GOT: (process closed stdout)")
-                return {"status": "error", "message": "process died unexpectedly"}
-
-            line = line.strip()
-            print(f"GOT: {line}")
-
-            if line == "done":
-                return {"status": "ok", "message": "moved"}
-            if line == "error":
-                return {"status": "error", "message": "daemon rejected command 'home'"}
+    return _roundtrip("home", timeout_s=15.0)
 
 

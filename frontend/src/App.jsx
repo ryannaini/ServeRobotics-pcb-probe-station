@@ -115,6 +115,18 @@ const STEP_ICON = { pending: '○', running: '', done: '✓', failed: '✕' }
 function LandingPage({ onInitialize, status, error, steps = [] }) {
   const isInitializing = status === 'initializing'
   const showSteps = isInitializing || steps.some((step) => step.state !== 'pending')
+  const runningId = steps.find((step) => step.state === 'running')?.id
+
+  // A ticking counter distinguishes "the arm is still homing" from "this hung".
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    setElapsed(0)
+    if (!runningId) return undefined
+
+    const startedAt = Date.now()
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [runningId])
 
   return (
     <div className="landing">
@@ -146,7 +158,10 @@ function LandingPage({ onInitialize, status, error, steps = [] }) {
                 <span className="init-step-icon">
                   {step.state === 'running' ? <span className="init-spinner" /> : STEP_ICON[step.state]}
                 </span>
-                <span className="init-step-label">{step.label}</span>
+                <span className="init-step-label">
+                  {step.label}
+                  {step.state === 'running' && elapsed > 0 && ` · ${elapsed}s`}
+                </span>
                 {step.note && <span className="init-step-note">{step.note}</span>}
               </li>
             ))}
@@ -417,6 +432,32 @@ function Dashboard({ boardStatus = {} }) {
     await fetch(`http://localhost:8000/jog?dx=${dx}&dy=${dy}`, { method: 'POST' })
   }
   jogRef.current = jog
+
+  // In/Out is one short velocity pulse per call, so hold = repeat, same as the
+  // D-pad. zBias only reflects where the node sits; the direction is its sign.
+  const zDirRef = useRef(null)
+
+  const startHoldZ = async (direction) => {
+    if (zDirRef.current === direction) return
+
+    const alreadyLooping = zDirRef.current !== null
+    zDirRef.current = direction
+    // Dragging across centre just changes direction; the running loop reads it
+    if (alreadyLooping) return
+
+    while (zDirRef.current) {
+      const response = await fetch(
+        `http://localhost:8000/jog/inout?direction=${zDirRef.current}`,
+        { method: 'POST' },
+      ).catch(() => null)
+      if (!response || !response.ok) break
+    }
+    zDirRef.current = null
+  }
+
+  const stopHoldZ = () => {
+    zDirRef.current = null
+  }
 
   const setAutofocus = async (enable) => {
     setOpticsError('')
@@ -716,12 +757,24 @@ function Dashboard({ boardStatus = {} }) {
                     const rect = track.getBoundingClientRect()
                     const t = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
                     // Top = In (+1), bottom = Out (−1)
-                    setZBias(1 - 2 * t)
+                    const bias = 1 - 2 * t
+                    setZBias(bias)
+
+                    // Deadband around centre so a resting node does not creep
+                    if (bias > 0.15) {
+                      startHoldZ('in')
+                    } else if (bias < -0.15) {
+                      startHoldZ('out')
+                    } else {
+                      stopHoldZ()
+                    }
                   }
                   move(e.clientY)
                   track.setPointerCapture(e.pointerId)
                   const onMove = (ev) => move(ev.clientY)
                   const onUp = () => {
+                    stopHoldZ()
+                    setZBias(0)  // spring back to centre, like releasing a jog
                     track.releasePointerCapture(e.pointerId)
                     track.removeEventListener('pointermove', onMove)
                     track.removeEventListener('pointerup', onUp)

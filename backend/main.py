@@ -30,6 +30,16 @@ def home_arm():
 def jog_arm(dx: float = 0, dy: float = 0):
     return arm_bridge.movecommands(dx, dy)
 
+## One velocity pulse per call, same as /jog — the UI repeats it while held.
+
+@app.post("/jog/inout")
+def jog_in_out(direction: str):
+    return arm_bridge.move_in_out(direction)
+
+@app.post("/retract")
+def retract_arm():
+    return arm_bridge.retract()
+
 ## The UI runs these two as separate steps so it can tick off the arm before
 ## the boards, instead of staring at one long request with no feedback.
 
