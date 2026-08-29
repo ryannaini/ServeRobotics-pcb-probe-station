@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Kinova_EthernetController.vcxproj" Id="cd876cd1-137e-40d4-881a-c685dd629ec2" />
+</Solution>
